@@ -110,7 +110,7 @@ wheels = [
 ]
 
 [[package]]
-name = "cogenial-disco"
+name = "axiomorphia"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
