@@ -70,7 +70,10 @@ source excerpts, and all revisions through cascading foreign keys.
 
 This store does not assert goals were achieved, change financial records, archive
 whole conversations, or execute instructions embedded in memory. The host supplies
-user review/approval and treats recalled text as untrusted data. MCP itself is not
+user approval or an application-specific automation policy and treats recalled text
+as untrusted data. The core does not check workflow outcomes or provide an approval
+queue. See [optional orchestration and CaMeL](AUTOMATION.md) for the proposed
+additional layer; it is not implemented by these MCP operations. MCP itself is not
 an OS sandbox: the child has its OS user's file/network access. Restricted database
 permissions do not protect against a compromised OS/backend. Standard tool errors
 are redacted; hosts should not forward private stderr/transport payloads to logs.

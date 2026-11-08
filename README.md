@@ -8,8 +8,9 @@ through **MCP over stdio** using their own fixed namespace.
 Abacus Budget advisor is one consumer: it can remember an approved intention to
 reduce discretionary spending, then recall it during a later savings discussion.
 Other applications can use namespaces such as `writing-assistant`, `project-planner`,
-or `developer-notes`. Babar contains no budgeting calculations, workflow engine,
-remediation agents, or application-specific orchestration.
+or `developer-notes`. The implemented service is the memory core; consumers supply
+application workflow and authorization. Optional orchestration can sit above that
+core for automated use cases without changing manual consumers such as Abacus.
 
 ## How it works
 
@@ -19,7 +20,7 @@ Application requests relevant context
   → namespace-scoped PostgreSQL/pgvector search
   → bounded source notes returned to the application
 
-Application approves a note
+Application authorizes a memory write
   → explicit create or revision-checked update
   → note + provenance + revision committed atomically
 ```
@@ -27,7 +28,26 @@ Application approves a note
 Similarity helps retrieval and duplicate suggestions. It **never** silently merges
 or overwrites records. The application decides what to remember, when approval is
 required, how much context to supply to its model, and what conclusions that context
-supports. Babar does not run generative models or execute instructions in notes.
+supports. The current core does not run generative models or execute instructions
+in notes.
+
+## Manual and automated consumers
+
+Abacus authorizes persistence through explicit user approval. An automated workflow
+can authorize applicable creates/revisions through a configured policy, verified
+outcome evidence, and validation outside the model. Similarity alone never grants
+permission to update a record.
+
+A proposed optional automation runner would provide candidate extraction,
+applicability decisions, evidence gates, review escalation, and reliable commits.
+Bounded workflows can use deterministic control flow with an isolated extractor;
+broader tool-using agents may benefit from CaMeL's privileged/quarantined model
+separation and enforced execution policies. A second model acting as a judge does
+not implement that security boundary on its own.
+
+These automation components are **not implemented** in the current service. See
+[optional orchestration and CaMeL](docs/AUTOMATION.md) for the responsibilities,
+example flow, security boundaries, and verification requirements.
 
 ## The MEMORA abstraction
 
@@ -119,15 +139,18 @@ kinds further: Abacus accepts intentions, preferences, and decisions. See the
 - `memory_update(id, note, expected_revision)`
 - `memory_forget(id, expected_revision)`
 
-The service fixes namespace/model configuration. No arbitrary SQL, file tools,
-network searches, sampling, or model-driven writes are provided. Hosts should use
-explicit approval for mutations and treat returned memory as untrusted context.
+The service fixes namespace/model configuration and provides no arbitrary SQL,
+file tools, network searches, or sampling. Hosts authorize mutations through user
+approval or a configured workflow policy and treat returned memory as untrusted
+context. Model output alone does not authorize a write; the core does not enforce
+application evidence/approval policy on the host's behalf.
 MCP itself is **not an OS sandbox**; the service runs with its OS user's access.
 
 ## Documentation and verification
 
 - [Protocol, permissions, setup/recovery, reindexing, and backups](docs/MEMORA.md)
 - [Architecture and extension boundaries](docs/ARCHITECTURE.md)
+- [Optional automation, evidence gates, and CaMeL](docs/AUTOMATION.md)
 - [Abacus integration](../abacus/docs/advisor-memory.md)
 
 Synthetic PostgreSQL and real stdio tests use a dedicated database whose name
