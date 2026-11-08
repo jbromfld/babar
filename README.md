@@ -1,85 +1,167 @@
-# cogenial-disco
+# Babar
 
-A CI/CD Agentic Memory Remediation System. When a pipeline fails, this framework retrieves past solutions from a vector memory store, attempts automated remediation, and consolidates new solutions into long-term memory — getting smarter with every incident it resolves.
+Babar is a local application-memory service implementing the **MEMORA** pattern.
+It stores sourced notes, retrieves relevant context, and preserves explicit
+revisions across conversations and application restarts. Applications connect
+through **MCP over stdio** using their own fixed namespace.
+
+Abacus Budget advisor is one consumer: it can remember an approved intention to
+reduce discretionary spending, then recall it during a later savings discussion.
+Other applications can use namespaces such as `writing-assistant`, `project-planner`,
+or `developer-notes`. The implemented service is the memory core; consumers supply
+application workflow and authorization. Optional orchestration can sit above that
+core for automated use cases without changing manual consumers such as Abacus.
 
 ## How it works
 
+```text
+Application requests relevant context
+  → local pinned embeddings + text/topic-cue matching
+  → namespace-scoped PostgreSQL/pgvector search
+  → bounded source notes returned to the application
+
+Application authorizes a memory write
+  → explicit create or revision-checked update
+  → note + provenance + revision committed atomically
 ```
-CI/CD failure webhook
-    → P-Agent searches pgvector memory for past solutions
-    → Apply known fix  OR  devise new fix
-    → Q-Agent validates and classifies the result (INSERT vs. UPDATE)
-    → Memory committed to PostgreSQL after successful merge
-```
 
-The memory loop closes only after a human-reviewed PR merges and CI passes. A UUID correlation ID ties the proposed fix branch (`agent-remediation/fix-{uuid}`) back to the agent's pending state, triggering the final memory commit.
+Similarity helps retrieval and duplicate suggestions. It **never** silently merges
+or overwrites records. The application decides what to remember, when approval is
+required, how much context to supply to its model, and what conclusions that context
+supports. The current core does not run generative models or execute instructions
+in notes.
 
-## Architecture
+## Manual and automated consumers
 
-Two design patterns drive this system:
+Abacus authorizes persistence through explicit user approval. An automated workflow
+can authorize applicable creates/revisions through a configured policy, verified
+outcome evidence, and validation outside the model. Similarity alone never grants
+permission to update a record.
 
-**MEMORA** — every memory is stored as four fields:
-- `primary_abstraction` — generalized error label (e.g. `"NPM Dependency Conflict"`)
-- `primary_embedding` — vector of that label for similarity search
-- `memory_value` — JSONB remediation steps
-- `cue_anchors` — metadata tags for fast filtering (e.g. `["repo:frontend", "stage:build"]`)
+A proposed optional automation runner would provide candidate extraction,
+applicability decisions, evidence gates, review escalation, and reliable commits.
+Bounded workflows can use deterministic control flow with an isolated extractor;
+broader tool-using agents may benefit from CaMeL's privileged/quarantined model
+separation and enforced execution policies. A second model acting as a judge does
+not implement that security boundary on its own.
 
-**CaMeL** (dual-LLM) — separates concerns between two agents:
-- **P-Agent (Privileged)** (ReAct, Anthropic) — orchestrates the full flow: search, fix, commit
-- **Q-Agent (Quarantined)** (structured output, Anthropic) — sandboxed judge that returns `{"action": "INSERT"|"UPDATE", "merged_content": "..."}`
+These automation components are **not implemented** in the current service. See
+[optional orchestration and CaMeL](docs/AUTOMATION.md) for the responsibilities,
+example flow, security boundaries, and verification requirements.
+
+## The MEMORA abstraction
+
+| Field | Purpose |
+| --- | --- |
+| `primary_abstraction` | Concise concept/title |
+| `primary_embedding` | Local vector for semantic retrieval |
+| `memory_value` | JSONB note, application-defined type, source date, and approved source excerpt |
+| `cue_anchors` | Topic tags for matching/filtering |
+
+Records also have an application namespace, UUID, idempotent creation key,
+revision, active/completed/abandoned status, and timestamps. Revisions retain
+provenance; forgetting deletes the record, embedding, source excerpts, and history.
+Completed/abandoned records remain inspectable but are excluded from recall.
 
 ## Quick start
 
-```bash
+Use PostgreSQL with **pgvector**, this repository's pinned CPython **3.13.16**, and
+`uv`. Install dependencies:
+
+```sh
 uv sync --locked --extra dev
-source .venv/bin/activate
-cp .env.example .env        # fill in DB credentials, API keys, model names
-python memory/migrate.py    # creates agent_memory table with correct VECTOR(N) column
 ```
 
-## Configuration
+Prepare the pinned offline embedding model manually before use:
+`sentence-transformers/all-MiniLM-L6-v2`, revision
+`c9745ed1d9f207416be6d2e6f8de32d1f16199bf`, dimension 384. Babar never downloads
+weights automatically, uses cloud embeddings, or enables remote tracing.
 
-All runtime config is in `.env`. Key variables:
+Provide local administrator PostgreSQL credentials through your environment
+(`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`; optional `PGDATABASE` for bootstrap).
+`.env.example` documents these; no `.env` is implicitly loaded. Then provision:
 
-| Variable | Default | Notes |
-|---|---|---|
-| `DB_HOST/PORT/NAME/USER/PASSWORD` | `localhost:5432` | PostgreSQL connection |
-| `EMBEDDING_PROVIDER` | `local` | `local` (MiniLM) or `openai` |
-| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Must match `EMBEDDING_DIM` |
-| `EMBEDDING_DIM` | `384` | Must match model output and schema column |
-| `MEMORY_SIMILARITY_THRESHOLD` | `0.80` | Cosine similarity cutoff for memory upsert |
-| `P_AGENT_MODEL` | `claude-sonnet-4-6` | P-Agent LLM |
-| `Q_AGENT_MODEL` | `claude-haiku-4-5-20251001` | Q-Agent LLM |
-| `LANGCHAIN_TRACING_V2` | `false` | Set to `true` to enable LangSmith tracing |
+```sh
+uv run --no-sync python -m memora.setup \
+  --config /absolute/private/memora-runtime.json \
+  --namespace developer-notes
+```
 
-See `.env.example` for the full list with comments.
+Setup creates the separate `babar_memory` database, versioned tables, and a
+restricted managed `babar_memory` runtime role. Optional `--database` and `--user`
+select another dedicated memory database/login. Generated runtime credentials are
+stored only in the owner-only JSON file; they are never printed. Routine setup
+preserves passwords. Use `--rotate-password` explicitly for managed-role recovery.
 
-## Local simulation
+Run through an MCP host, or directly for protocol testing:
 
-The agent entrypoints are not yet built. The planned local test harness (from `ARCHITECTURE.md`) uses:
-- `mock_ci.py` — simulates a build; writes to `error.log` on failure, `success.log` on pass
-- `agent_flow.py` — LangGraph app watching `error.log`; outputs a `.patch` file for human review
-- Human applies the patch, reruns `mock_ci.py`, and the agent completes the memory commit on success
+```sh
+MEMORA_CONFIG=/absolute/private/memora-runtime.json \
+  uv run --no-sync python -m memora.server
+```
 
-## Stack
+The server uses stdin/stdout for MCP, not a terminal chat interface or HTTP port.
+Configure your host with an absolute `.venv/bin/python` executable, arguments
+`["-m", "memora.server"]`, and only `MEMORA_CONFIG` plus necessary OS/offline flags.
+Do not forward the host's application, administrator, cloud, or search credentials.
 
-- **PostgreSQL + pgvector** — vector similarity store
-- **LangChain / LangGraph** — agent orchestration
-- **sentence-transformers** — local embeddings (default)
-- **Anthropic Claude** — P-Agent and Q-Agent LLMs (default)
-- **LangSmith** — tracing (opt-in via `.env`)
+## Application namespaces
 
-## Standardized environment
+Each runtime JSON fixes exactly one namespace; tool callers cannot override it.
+Every search, list, UUID lookup, update, and forget scopes that namespace. Multiple
+application profiles can use the same memory database/model identity with different
+namespaces, or separate databases/logins for stronger application separation.
+Profiles are configured by their operator, not by model-generated arguments.
+For example, add another trusted application's profile with a distinct managed login:
 
-Use CPython **3.13.16** and `uv sync --locked` for this repository. The dependency
-source of truth is `pyproject.toml` plus committed `uv.lock`. Use
-`uv sync --locked --extra dev` when development extras are needed (where defined).
-Shared Ansible provisioning and runtime version checks are documented in [local-agent-environment](../local-agent-environment/README.md).
-Its `.tools/bin/uv` provides the pinned uv version independently of PATH.
+```sh
+uv run --no-sync python -m memora.setup \
+  --config /absolute/private/writing-memory.json --namespace writing-assistant \
+  --database babar_memory --user writing_memory
+```
 
-Set `EMBEDDING_MODEL_REVISION` to pin the local model's Hugging Face commit.
-Preserve the model and dimension when adopting existing embeddings; changing
-weights requires an explicit re-embedding migration.
+Namespace scoping is an application boundary inside a trusted local service, not
+multi-user database authorization: the runtime role has access to memory tables.
+For mutually untrusted consumers, use separate databases/logins and OS isolation.
+Abacus uses its own memory database/login, separate from its financial database.
 
-Linux ARM64 uses the explicit PyTorch CPU wheel index; CUDA dependencies are
-excluded from this environment. macOS ARM64 uses the regular macOS wheel.
+The current note contract supports title, short text, application-defined kind,
+source date/excerpt, topic cues, and lifecycle status. A consumer can constrain
+kinds further: Abacus accepts intentions, preferences, and decisions. See the
+[protocol and operations guide](docs/MEMORA.md) for limits and error semantics.
+
+## MCP operations
+
+- `memory_status`
+- `memory_search(query, limit)`
+- `memory_list(offset, limit)` and `memory_get(id)`
+- `memory_create(note, create_key)`
+- `memory_update(id, note, expected_revision)`
+- `memory_forget(id, expected_revision)`
+
+The service fixes namespace/model configuration and provides no arbitrary SQL,
+file tools, network searches, or sampling. Hosts authorize mutations through user
+approval or a configured workflow policy and treat returned memory as untrusted
+context. Model output alone does not authorize a write; the core does not enforce
+application evidence/approval policy on the host's behalf.
+MCP itself is **not an OS sandbox**; the service runs with its OS user's access.
+
+## Documentation and verification
+
+- [Protocol, permissions, setup/recovery, reindexing, and backups](docs/MEMORA.md)
+- [Architecture and extension boundaries](docs/ARCHITECTURE.md)
+- [Optional automation, evidence gates, and CaMeL](docs/AUTOMATION.md)
+- [Abacus integration](../abacus/docs/advisor-memory.md)
+
+Synthetic PostgreSQL and real stdio tests use a dedicated database whose name
+starts with `babar_test` (default `babar_test_memory`). Set `MEMORA_TEST_DSN` for
+another isolated test database with that prefix. The test administrator needs
+role/extension-management privileges; password-verifier tests require a superuser.
+
+```sh
+uv run --no-sync pytest tests/test_memora.py -q
+```
+
+The dependency source of truth is `pyproject.toml` and `uv.lock`. Shared runtime
+provisioning is documented in [local-agent-environment](../local-agent-environment/README.md).
+Linux ARM64 uses pinned CPU PyTorch wheels; macOS ARM64 uses standard macOS wheels.
