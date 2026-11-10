@@ -9,8 +9,7 @@ Abacus Budget advisor is one consumer: it can remember an approved intention to
 reduce discretionary spending, then recall it during a later savings discussion.
 Other applications can use namespaces such as `writing-assistant`, `project-planner`,
 or `developer-notes`. The implemented service is the memory core; consumers supply
-application workflow and authorization. Optional orchestration can sit above that
-core for automated use cases without changing manual consumers such as Abacus.
+application workflow and authorization.
 
 ## How it works
 
@@ -31,23 +30,25 @@ required, how much context to supply to its model, and what conclusions that con
 supports. The current core does not run generative models or execute instructions
 in notes.
 
-## Manual and automated consumers
+## Place in the local stack
 
-Abacus authorizes persistence through explicit user approval. An automated workflow
-can authorize applicable creates/revisions through a configured policy, verified
-outcome evidence, and validation outside the model. Similarity alone never grants
-permission to update a record.
+[Lassy](../lassy/README.md) indexes research documents and returns evidence chunks;
+Babar stores bounded application notes with provenance and explicit revisions.
+They can use the same PostgreSQL host but keep separate databases, credentials
+and embedding identities. Babar defaults to 384-dimensional MiniLM embeddings;
+Lassy defaults to 768-dimensional MPNet embeddings.
 
-A proposed optional automation runner would provide candidate extraction,
-applicability decisions, evidence gates, review escalation, and reliable commits.
-Bounded workflows can use deterministic control flow with an isolated extractor;
-broader tool-using agents may benefit from CaMeL's privileged/quarantined model
-separation and enforced execution policies. A second model acting as a judge does
-not implement that security boundary on its own.
+There is no automatic connection to [Lalaland](../lalaland/README.md), Lassy or
+[local-mcp-server](../local-mcp-server/README.md). An application must explicitly
+configure Babar as its memory consumer. Its host spawns the stdio MCP process;
+there is no HTTP endpoint, Temporal/Ollama dependency, Argo workload or login
+service to start. [local-agent-environment](../local-agent-environment/README.md)
+provides shared runtime/model preparation and the stack's management overview.
 
-These automation components are **not implemented** in the current service. See
-[optional orchestration and CaMeL](docs/AUTOMATION.md) for the responsibilities,
-example flow, security boundaries, and verification requirements.
+Applications own write authorization: Abacus uses explicit user approval;
+automated consumers need their own configured policy and validation. An automation
+runner is not implemented here. The optional design is described in
+[orchestration notes](docs/AUTOMATION.md), separate from normal setup.
 
 ## The MEMORA abstraction
 
