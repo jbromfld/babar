@@ -1,5 +1,7 @@
 # Babar
 
+![A wise elephant recalling a glowing note from an organized archive of memories](docs/images/babar-memory.png)
+
 Babar is a local application-memory service implementing the **MEMORA** pattern.
 It stores sourced notes, retrieves relevant context, and preserves explicit
 revisions across conversations and application restarts. Applications connect
