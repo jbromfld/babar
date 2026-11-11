@@ -337,4 +337,3 @@ uv run --no-sync pytest tests/test_memora.py -q
 - [Optional dreaming and consolidation](https://github.com/jbromfld/babar/blob/master/docs/DREAMING.md)
 - [Future-state designs](https://github.com/jbromfld/babar/blob/master/docs/future-state/README.md)
 - [Example consumer: Abacus](https://github.com/jbromfld/abacus/blob/master/docs/advisor-memory.md)
-- [Optional shared host provisioning: local-agent-environment](https://github.com/jbromfld/local-agent-environment)
