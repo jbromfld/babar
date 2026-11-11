@@ -18,7 +18,7 @@ babar-setup = "memora.setup:main"
 dev = ["pytest>=8,<10", "ruff>=0.17.4"]
 
 [build-system]
-requires = ["setuptools==84.0.0"]
+requires = ["setuptools==84.1.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
