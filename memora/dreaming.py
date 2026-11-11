@@ -59,7 +59,7 @@ class DreamingStore:
             }
 
     def consolidate(self, note, sources, operation_key):
-        from .store import Note, StoreError, public
+        from .store import Note
 
         note = Note.model_validate(note)
         if note.status != "active" or not 2 <= len(sources) <= 5:
@@ -76,69 +76,74 @@ class DreamingStore:
             note.title + " " + note.text + " " + " ".join(note.cues)
         )
         with self.connect() as conn, conn.cursor() as cur:
-            self._dream_lock(cur)
+            return self._consolidate(cur, note, expected, key, identity, embedding)
+
+    def _consolidate(self, cur, note, expected, key, identity, embedding):
+        from .store import StoreError, public
+
+        self._dream_lock(cur)
+        cur.execute(
+            "SELECT * FROM memora_consolidations WHERE namespace=%s AND operation_key=%s",
+            (self.config.namespace, key),
+        )
+        old = cur.fetchone()
+        if old:
+            if old["request"] != json.loads(json.dumps(identity)) or old["undone"]:
+                raise StoreError(
+                    "conflict", "Consolidation request changed or was undone."
+                )
+            return self._dream_result(cur, old["result_id"])
+        cur.execute(
+            "SELECT * FROM memora_notes WHERE namespace=%s AND id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE",
+            (self.config.namespace, sorted(expected)),
+        )
+        rows = cur.fetchall()
+        if len(rows) != len(expected) or any(
+            r["revision"] != expected[str(r["id"])]
+            or r["status"] != "active"
+            or r["superseded_by"]
+            or r["memory_value"]["kind"] != note.kind
+            for r in rows
+        ):
+            raise StoreError("conflict", "A source changed or is no longer active.")
+        if note.source_date.isoformat() != min(
+            r["memory_value"]["source_date"] for r in rows
+        ):
+            # Dates retain their original meaning, not the consolidation date.
+            raise ValueError("Use the earliest original source date")
+        identifier = str(uuid4())
+        snapshots = [public(r) for r in rows]
+        cur.execute(
+            """INSERT INTO memora_notes(namespace,id,create_key,primary_abstraction,primary_embedding,memory_value,cue_anchors,revision,status)
+            VALUES(%s,%s,%s,%s,%s::vector,%s,%s,1,'active') RETURNING *""",
+            (
+                self.config.namespace,
+                identifier,
+                str(uuid4()),
+                note.title,
+                embedding,
+                Json(note.model_dump(mode="json")),
+                note.cues,
+            ),
+        )
+        self._revision(cur, public(cur.fetchone()))
+        for row in rows:
             cur.execute(
-                "SELECT * FROM memora_consolidations WHERE namespace=%s AND operation_key=%s",
-                (self.config.namespace, key),
-            )
-            old = cur.fetchone()
-            if old:
-                if old["request"] != json.loads(json.dumps(identity)) or old["undone"]:
-                    raise StoreError(
-                        "conflict", "Consolidation request changed or was undone."
-                    )
-                return self._dream_result(cur, old["result_id"])
-            cur.execute(
-                "SELECT * FROM memora_notes WHERE namespace=%s AND id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE",
-                (self.config.namespace, sorted(expected)),
-            )
-            rows = cur.fetchall()
-            if len(rows) != len(expected) or any(
-                r["revision"] != expected[str(r["id"])]
-                or r["status"] != "active"
-                or r["superseded_by"]
-                or r["memory_value"]["kind"] != note.kind
-                for r in rows
-            ):
-                raise StoreError("conflict", "A source changed or is no longer active.")
-            if note.source_date.isoformat() != min(
-                r["memory_value"]["source_date"] for r in rows
-            ):
-                # Dates retain their original meaning, not the consolidation date.
-                raise ValueError("Use the earliest original source date")
-            identifier = str(uuid4())
-            snapshots = [public(r) for r in rows]
-            cur.execute(
-                """INSERT INTO memora_notes(namespace,id,create_key,primary_abstraction,primary_embedding,memory_value,cue_anchors,revision,status)
-                VALUES(%s,%s,%s,%s,%s::vector,%s,%s,1,'active') RETURNING *""",
-                (
-                    self.config.namespace,
-                    identifier,
-                    str(uuid4()),
-                    note.title,
-                    embedding,
-                    Json(note.model_dump(mode="json")),
-                    note.cues,
-                ),
+                "UPDATE memora_notes SET superseded_by=%s,revision=revision+1,updated_at=now() WHERE namespace=%s AND id=%s RETURNING *",
+                (identifier, self.config.namespace, str(row["id"])),
             )
             self._revision(cur, public(cur.fetchone()))
-            for row in rows:
-                cur.execute(
-                    "UPDATE memora_notes SET superseded_by=%s,revision=revision+1,updated_at=now() WHERE namespace=%s AND id=%s RETURNING *",
-                    (identifier, self.config.namespace, str(row["id"])),
-                )
-                self._revision(cur, public(cur.fetchone()))
-            cur.execute(
-                "INSERT INTO memora_consolidations(namespace,operation_key,result_id,request,sources) VALUES(%s,%s,%s,%s,%s)",
-                (
-                    self.config.namespace,
-                    key,
-                    identifier,
-                    Json(identity),
-                    Json(snapshots),
-                ),
-            )
-            return self._dream_result(cur, identifier)
+        cur.execute(
+            "INSERT INTO memora_consolidations(namespace,operation_key,result_id,request,sources) VALUES(%s,%s,%s,%s,%s)",
+            (
+                self.config.namespace,
+                key,
+                identifier,
+                Json(identity),
+                Json(snapshots),
+            ),
+        )
+        return self._dream_result(cur, identifier)
 
     def _dream_result(self, cur, identifier):
         from .store import public
@@ -240,4 +245,5 @@ class DreamingStore:
                 "DELETE FROM memora_notes WHERE namespace=%s AND id=ANY(%s::uuid[])",
                 (self.config.namespace, sorted(family)),
             )
+            self._purge_dreams(cur, sorted(family))
             return {"forgotten": True, "count": len(family)}

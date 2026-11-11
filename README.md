@@ -46,7 +46,8 @@ service to start. [local-agent-environment](../local-agent-environment/README.md
 provides shared runtime/model preparation and the stack's management overview.
 
 Applications own write authorization: Abacus uses explicit user approval;
-automated consumers need their own configured policy and validation. An automation
+automated consumers need their own configured policy and validation. An optional deterministic dreaming controller is implemented here; consumers
+supply scheduling, model adapters and authorization. A general automation
 runner is not implemented here. The optional design is described in
 [orchestration notes](docs/AUTOMATION.md), separate from normal setup.
 
@@ -144,9 +145,16 @@ kinds further: Abacus accepts intentions, preferences, and decisions. See the
 - `memory_consolidation_status(operation_key)`
 - `memory_undo_consolidation(operation_key, expected_revision)`
 - `memory_forget_consolidation(id, expected_revision)`
+- `memory_dream_prepare(pass_key)`
+- `memory_dream_get(operation_key)`
+- `memory_dream_evaluate(operation_key, raw)`
+- `memory_dream_commit(operation_key, reviewed=false, note=null)`
+- `memory_dream_cancel(operation_key)`
 
-Schema version 2 adds explicit consolidation and retained lineage. Run setup to
-upgrade the memory database and runtime grants; status advertises `dreaming-v1`.
+Schema version 3 retains consolidation/lineage from version 2 and adds optional
+controller-owned proposal state. Run setup to
+upgrade the memory database and runtime grants; status advertises `dreaming-v1`
+for storage primitives and `dreaming-controller-v1` for the optional controller.
 Babar never calls a generative model. See [dreaming](docs/DREAMING.md).
 
 The service fixes namespace/model configuration and provides no arbitrary SQL,
@@ -175,3 +183,6 @@ uv run --no-sync pytest tests/test_memora.py -q
 The dependency source of truth is `pyproject.toml` and `uv.lock`. Shared runtime
 provisioning is documented in [local-agent-environment](../local-agent-environment/README.md).
 Linux ARM64 uses pinned CPU PyTorch wheels; macOS ARM64 uses standard macOS wheels.
+
+See [optional dreaming](docs/DREAMING.md) and the
+[future-state README](docs/future-state/README.md) for boundaries and possible enhancements.
