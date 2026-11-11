@@ -1,57 +1,62 @@
 ![A wise elephant recalling a glowing note from an organized archive of memories](docs/images/babar.png)
 
 # Babar
-Babar is a local application-memory service implementing the **MEMORA** pattern.
-It stores sourced notes, retrieves relevant context, and preserves explicit
-revisions across conversations and application restarts. Applications connect
-through **MCP over stdio** using their own fixed namespace.
 
-Abacus Budget advisor is one consumer: it can remember an approved intention to
-reduce discretionary spending, then recall it during a later savings discussion.
-Other applications can use namespaces such as `writing-assistant`, `project-planner`,
-or `developer-notes`. The implemented service is the memory core; consumers supply
-application workflow and authorization.
+Babar is an independent, local application-memory tool implementing the **MEMORA**
+pattern. It stores sourced notes, retrieves relevant context, and preserves explicit
+revisions across conversations and application restarts. Any local application or
+MCP host can consume it through **MCP over stdio**, using a fixed namespace.
+The Python distribution is named `babar`; its implementation package is `memora`.
 
-## How it works
+For example, Abacus Budget advisor can remember an approved intention to reduce
+spending and recall it during a later savings discussion. A writing assistant,
+project planner, or developer tool can use the same service with its own notes,
+namespace, and authorization policy. Abacus is one consumer, not a prerequisite.
+
+## Boundaries and responsibilities
+
+| Component | Owns |
+| --- | --- |
+| Babar | Note validation, namespace-scoped retrieval, offline embeddings, provenance, revisions, idempotency, and atomic persistence |
+| Consumer / MCP host | Starting and stopping the MCP child, application workflow, write authorization, context budgets, and interpretation of recalled notes |
+| Operator | Python environment, PostgreSQL with pgvector, offline model cache, private runtime profiles, migrations, and backups |
+
+Babar runs as a local stdio process. Its database is separate from the consumer's
+application data. It requires neither a particular application repository nor a
+workflow engine, generative-model server, container platform, or HTTP service.
+PostgreSQL and the model cache must be prepared separately; starting Babar does
+not provision them. The current database connection is restricted to loopback.
+
+Applications authorize mutations through user approval or a configured workflow
+policy. The core validates storage operations but does not enforce application
+approval or evidence policies. Recalled notes are untrusted context, not executable
+instructions. Babar does not run generative models or execute instructions in notes.
+MCP itself is not an OS sandbox: the process runs with its OS user's access.
+
+An optional deterministic dreaming controller supports proposal evaluation and
+explicit consolidation. Consumers supply scheduling, model adapters, and
+authorization; Babar supplies no general automation runner. See
+[optional dreaming](https://github.com/jbromfld/babar/blob/master/docs/DREAMING.md)
+and [orchestration notes](https://github.com/jbromfld/babar/blob/master/docs/AUTOMATION.md).
+
+## How memory works
 
 ```text
-Application requests relevant context
+Consumer requests relevant context
   → local pinned embeddings + text/topic-cue matching
   → namespace-scoped PostgreSQL/pgvector search
-  → bounded source notes returned to the application
+  → bounded source notes returned to the consumer
 
-Application authorizes a memory write
+Consumer authorizes a memory write
   → explicit create or revision-checked update
   → note + provenance + revision committed atomically
 ```
 
-Similarity helps retrieval and duplicate suggestions. It **never** merges records from similarity alone. Consolidation requires an explicit, revision-checked operation authorized by the consumer. The application decides what to remember, when approval is
-required, how much context to supply to its model, and what conclusions that context
-supports. The current core does not run generative models or execute instructions
-in notes.
+Similarity helps retrieval and duplicate suggestions. It never merges records by
+itself: consolidation requires an explicit, revision-checked operation authorized
+by the consumer.
 
-## Place in the local stack
-
-[Lassy](../lassy/README.md) indexes research documents and returns evidence chunks;
-Babar stores bounded application notes with provenance and explicit revisions.
-They can use the same PostgreSQL host but keep separate databases, credentials
-and embedding identities. Babar defaults to 384-dimensional MiniLM embeddings;
-Lassy defaults to 768-dimensional MPNet embeddings.
-
-There is no automatic connection to [Lalaland](../lalaland/README.md), Lassy or
-[local-mcp-server](../local-mcp-server/README.md). An application must explicitly
-configure Babar as its memory consumer. Its host spawns the stdio MCP process;
-there is no HTTP endpoint, Temporal/Ollama dependency, Argo workload or login
-service to start. [local-agent-environment](../local-agent-environment/README.md)
-provides shared runtime/model preparation and the stack's management overview.
-
-Applications own write authorization: Abacus uses explicit user approval;
-automated consumers need their own configured policy and validation. An optional deterministic dreaming controller is implemented here; consumers
-supply scheduling, model adapters and authorization. A general automation
-runner is not implemented here. The optional design is described in
-[orchestration notes](docs/AUTOMATION.md), separate from normal setup.
-
-## The MEMORA abstraction
+The MEMORA record consists of:
 
 | Field | Purpose |
 | --- | --- |
@@ -60,77 +65,237 @@ runner is not implemented here. The optional design is described in
 | `memory_value` | JSONB note, application-defined type, source date, and approved source excerpt |
 | `cue_anchors` | Topic tags for matching/filtering |
 
-Records also have an application namespace, UUID, idempotent creation key,
-revision, active/completed/abandoned status, and timestamps. Revisions retain
-provenance; forgetting deletes the record, embedding, source excerpts, and history.
+Records also have a namespace, UUID, idempotent creation key, revision,
+active/completed/abandoned status, and timestamps. Revisions retain provenance.
 Completed/abandoned records remain inspectable but are excluded from recall.
+Forgetting deletes the record, embedding, source excerpts, and history; independently
+retained backups have their own retention lifecycle.
 
-## Quick start
+## Install and prepare
 
-Use PostgreSQL with **pgvector**, this repository's pinned CPython **3.13.16**, and
-`uv`. Install dependencies:
+### 1. Install the Python package
+
+Use the repository's pinned CPython **3.13.16** and `uv`. The current lockfile targets
+macOS ARM64 and Linux ARM64; Linux uses pinned CPU PyTorch wheels.
 
 ```sh
+git clone https://github.com/jbromfld/babar.git
+cd babar
 uv sync --locked --extra dev
 ```
 
-Prepare the pinned offline embedding model manually before use:
-`sentence-transformers/all-MiniLM-L6-v2`, revision
-`c9745ed1d9f207416be6d2e6f8de32d1f16199bf`, dimension 384. Babar never downloads
-weights automatically, uses cloud embeddings, or enables remote tracing.
+Run subsequent `uv` commands from this checkout. This installs Babar in an editable
+`.venv` along with runtime and development dependencies. For runtime-only use,
+omit `--extra dev`. Dependencies are defined by
+[pyproject.toml](https://github.com/jbromfld/babar/blob/master/pyproject.toml) and
+[uv.lock](https://github.com/jbromfld/babar/blob/master/uv.lock).
 
-Provide local administrator PostgreSQL credentials through your environment
-(`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`; optional `PGDATABASE` for bootstrap).
-`.env.example` documents these; no `.env` is implicitly loaded. Then provision:
+### 2. Prepare the offline embedding model
+
+Before starting a consumer, explicitly acquire this exact model snapshot:
+
+- Model: `sentence-transformers/all-MiniLM-L6-v2`
+- Revision: `c9745ed1d9f207416be6d2e6f8de32d1f16199bf`
+- Embedding dimension: **384**
+
+For example, on a network-connected machine, download it to the Hugging Face cache
+used by the eventual runtime OS user:
 
 ```sh
-uv run --no-sync python -m memora.setup \
-  --config /absolute/private/memora-runtime.json \
-  --namespace developer-notes
+uv run --no-sync python - <<'PYMODEL'
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="sentence-transformers/all-MiniLM-L6-v2",
+    revision="c9745ed1d9f207416be6d2e6f8de32d1f16199bf",
+)
+PYMODEL
 ```
 
-Setup creates the separate `babar_memory` database, versioned tables, and a
-restricted managed `babar_memory` runtime role. Optional `--database` and `--user`
+This is an explicit preparation step. Runtime never downloads weights, uses cloud
+embeddings, or enables remote tracing. If using a custom cache, set the same
+`HF_HOME` during preparation and in the MCP child's environment. An isolated
+runtime needs a readable copy of that cache.
+
+### 3. Provision PostgreSQL and a runtime profile
+
+Start a local PostgreSQL instance with pgvector installed on the database server.
+Use your PostgreSQL installation's service commands; Babar does not manage the
+database process. Supply administrator `PGHOST`, `PGPORT`, `PGUSER`, and `PGPASSWORD`
+through a private environment; `PGDATABASE` optionally selects the bootstrap
+database. See [.env.example](https://github.com/jbromfld/babar/blob/master/.env.example).
+Babar does not implicitly load `.env` files.
+
+Choose a private absolute path and an application namespace, then run:
+
+```sh
+uv run --no-sync babar-setup \
+  --config /absolute/private/project-memory.json \
+  --namespace project-planner
+```
+
+Setup creates the dedicated `babar_memory` database, versioned tables, and a
+restricted managed `babar_memory` runtime login. Optional `--database` and `--user`
 select another dedicated memory database/login. Generated runtime credentials are
-stored only in the owner-only JSON file; they are never printed. Routine setup
+saved in the owner-only JSON file with mode `0600`, never printed. Routine setup
 preserves passwords. Use `--rotate-password` explicitly for managed-role recovery.
+Keep runtime profiles outside version control.
 
-Run through an MCP host, or directly for protocol testing:
+The profile fixes database credentials, namespace, and model identity. Runtime
+loads it only through `MEMORA_CONFIG`; administrator credentials are needed for
+setup and maintenance, not normal memory operations.
 
-```sh
-MEMORA_CONFIG=/absolute/private/memora-runtime.json \
-  uv run --no-sync python -m memora.server
+## Consume Babar through MCP
+
+Configure an MCP-capable application to launch Babar as a stdio child. A typical
+host configuration looks like this; adapt the outer structure to your host:
+
+```json
+{
+  "mcpServers": {
+    "babar": {
+      "command": "/absolute/path/to/babar/.venv/bin/babar-memory",
+      "args": [],
+      "env": {
+        "MEMORA_CONFIG": "/absolute/private/project-memory.json",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1"
+      }
+    }
+  }
+}
 ```
 
-The server uses stdin/stdout for MCP, not a terminal chat interface or HTTP port.
-Configure your host with an absolute `.venv/bin/python` executable, arguments
-`["-m", "memora.server"]`, and only `MEMORA_CONFIG` plus necessary OS/offline flags.
-Do not forward the host's application, administrator, cloud, or search credentials.
+Replace the placeholder paths with absolute paths on the runtime machine. The
+installed entry point works independently of the host's working directory.
+Alternatively, use `/absolute/path/to/babar/.venv/bin/python` with arguments
+`["-m", "memora.server"]`. Add `HF_HOME` if using a custom cache. Configure the host
+to pass only the required OS/cache variables and `MEMORA_CONFIG`; an `env` block
+may augment inherited variables, so check the host's environment handling. Do not
+forward application, administrator, cloud, or search credentials to the child.
 
-## Application namespaces
+The host establishes the MCP session and invokes tools. Call `memory_status`
+first to verify database/schema/model compatibility and offline model readiness.
+Successful tool results use `{ok: true, data: ...}`; failures use
+`{ok: false, code, message}`. Then retrieve context with `memory_search`, inspect
+notes with `memory_list` / `memory_get`, and apply authorized writes explicitly.
+Writes need a stable creation key or the inspected revision, depending on the
+operation. See the [protocol guide](https://github.com/jbromfld/babar/blob/master/docs/MEMORA.md)
+for note schemas, limits, idempotency, and errors.
 
-Each runtime JSON fixes exactly one namespace; tool callers cannot override it.
-Every search, list, UUID lookup, update, and forget scopes that namespace. Multiple
-application profiles can use the same memory database/model identity with different
-namespaces, or separate databases/logins for stronger application separation.
-Profiles are configured by their operator, not by model-generated arguments.
-For example, add another trusted application's profile with a distinct managed login:
+For protocol testing, start the same process directly from the checkout:
 
 ```sh
-uv run --no-sync python -m memora.setup \
-  --config /absolute/private/writing-memory.json --namespace writing-assistant \
+MEMORA_CONFIG=/absolute/private/project-memory.json \
+  uv run --no-sync babar-memory
+```
+
+This command waits for MCP messages on stdin. It is not a terminal chat interface;
+stdout is reserved for the protocol. Normal use connects it to an MCP host.
+
+### Application namespaces
+
+Each runtime profile fixes exactly one namespace; tool callers cannot override it.
+Every search, list, UUID lookup, update, and forget scopes that namespace. Profiles
+are configured by the operator, not by model-generated arguments.
+
+Trusted consumers may share a memory database/model identity with separate
+namespaces and managed logins. For example:
+
+```sh
+uv run --no-sync babar-setup \
+  --config /absolute/private/writing-memory.json \
+  --namespace writing-assistant \
   --database babar_memory --user writing_memory
 ```
 
 Namespace scoping is an application boundary inside a trusted local service, not
-multi-user database authorization: the runtime role has access to memory tables.
+multi-user database authorization: runtime roles have access to memory tables.
 For mutually untrusted consumers, use separate databases/logins and OS isolation.
-Abacus uses its own memory database/login, separate from its financial database.
+All profiles sharing one database must use the same embedding identity.
 
-The current note contract supports title, short text, application-defined kind,
-source date/excerpt, topic cues, and lifecycle status. A consumer can constrain
-kinds further: Abacus accepts intentions, preferences, and decisions. See the
-[protocol and operations guide](docs/MEMORA.md) for limits and error semantics.
+Consumers define note kinds and approval flows. For example,
+[Abacus](https://github.com/jbromfld/abacus/blob/master/docs/advisor-memory.md)
+uses its own memory database/login, separate from its financial database, and
+accepts intentions, preferences, and decisions with explicit user approval.
+Other consumers can define their own kinds and policies.
+
+## Start, stop, and restart
+
+| Action | Procedure |
+| --- | --- |
+| Start | Ensure PostgreSQL is running and the model cache/profile are available, then enable/connect Babar in the MCP host. The host spawns the stdio child. |
+| Stop | Disable/disconnect Babar in the host and let it close the session and terminate the child. For a manually launched foreground process, use Ctrl-C. |
+| Restart | Use the host's MCP restart/reconnect control, or disable and re-enable the integration. Restart the host if it has no per-server control. |
+| Recover after reboot | Start PostgreSQL, make the profile/model cache available, and reopen or reconnect the consumer. Call `memory_status` to verify readiness. |
+
+Babar has no HTTP port, built-in daemon, or standalone service manager. The host
+owns process lifetime and any automatic respawn. Stop or disable the integration
+before maintenance so the host does not immediately relaunch it. Persisted notes
+survive process and consumer restarts in PostgreSQL; stopping Babar does not stop
+PostgreSQL or delete memory. Each running consumer can spawn its own child.
+
+## Build, rebuild, and upgrade
+
+For development or local use, `uv sync` installs the package directly; a wheel is
+optional. To produce a source distribution and wheel in `dist/`:
+
+```sh
+uv build --clear
+```
+
+The build backend and version are declared in `pyproject.toml`. Artifacts contain
+Python code and `schema.sql`; they do not bundle dependencies, database contents,
+private runtime profiles, or model weights. `uv.lock` governs dependency installation
+from the checkout; a wheel alone does not carry that locked environment or the
+Linux CPU-wheel source configuration. Retain the project dependency configuration
+when packaging a runtime.
+
+To use the built wheel in this checkout's environment while preserving its locked
+dependencies and platform-specific sources:
+
+```sh
+uv sync --locked --no-install-project
+uv pip install --python .venv/bin/python --no-deps --reinstall dist/babar-*.whl
+```
+
+The same MCP launch configuration applies. Use `uv run --no-sync` or the installed
+entry point directly afterward; a normal `uv sync` reinstalls the editable project.
+
+To rebuild after updating the checkout:
+
+1. Stop the MCP integration in every affected host.
+2. Update to the intended source revision, then synchronize dependencies:
+
+   ```sh
+   uv sync --locked --extra dev
+   ```
+
+3. If distributing artifacts, run `uv build --clear` again and reinstall the new
+   wheel in the consuming runtime. Editable installations use changed source
+   directly; package metadata/dependency changes still require synchronization.
+4. If the release changes the schema or grants, back up the memory database/profile
+   and rerun `babar-setup` with the existing profile and namespace, using administrator
+   PG credentials. Setup upgrades the schema and runtime grants; it preserves notes
+   and routine passwords. Current schema version is **3**.
+5. Restart/reconnect each host so it loads the new code and configuration, then call
+   `memory_status`.
+
+A rebuild or restart does not regenerate embeddings. Changing model weights,
+revision, or dimension requires a separate administrator reindex: stop all affected
+consumers, back up the database/profile, prepare the new offline model, update the
+profile identity, and run:
+
+```sh
+MEMORA_CONFIG=/absolute/private/project-memory.json \
+  uv run --no-sync python -m memora.reindex
+```
+
+Reindex uses administrator PG credentials and atomically replaces vectors and model
+identity. Update all profiles sharing that database before restarting consumers.
+See [reindexing, backups, and recovery](https://github.com/jbromfld/babar/blob/master/docs/MEMORA.md#reindex-and-backups)
+for the full procedure.
 
 ## MCP operations
 
@@ -151,25 +316,11 @@ kinds further: Abacus accepts intentions, preferences, and decisions. See the
 - `memory_dream_commit(operation_key, reviewed=false, note=null)`
 - `memory_dream_cancel(operation_key)`
 
-Schema version 3 retains consolidation/lineage from version 2 and adds optional
-controller-owned proposal state. Run setup to
-upgrade the memory database and runtime grants; status advertises `dreaming-v1`
-for storage primitives and `dreaming-controller-v1` for the optional controller.
-Babar never calls a generative model. See [dreaming](docs/DREAMING.md).
+Status advertises `dreaming-v1` for storage primitives and `dreaming-controller-v1`
+for the optional controller. The service provides no arbitrary SQL, file tools,
+network searches, or MCP sampling.
 
-The service fixes namespace/model configuration and provides no arbitrary SQL,
-file tools, network searches, or sampling. Hosts authorize mutations through user
-approval or a configured workflow policy and treat returned memory as untrusted
-context. Model output alone does not authorize a write; the core does not enforce
-application evidence/approval policy on the host's behalf.
-MCP itself is **not an OS sandbox**; the service runs with its OS user's access.
-
-## Documentation and verification
-
-- [Protocol, permissions, setup/recovery, reindexing, and backups](docs/MEMORA.md)
-- [Architecture and extension boundaries](docs/ARCHITECTURE.md)
-- [Optional automation, evidence gates, and CaMeL](docs/AUTOMATION.md)
-- [Abacus integration](../abacus/docs/advisor-memory.md)
+## Verification and further reading
 
 Synthetic PostgreSQL and real stdio tests use a dedicated database whose name
 starts with `babar_test` (default `babar_test_memory`). Set `MEMORA_TEST_DSN` for
@@ -180,9 +331,10 @@ role/extension-management privileges; password-verifier tests require a superuse
 uv run --no-sync pytest tests/test_memora.py -q
 ```
 
-The dependency source of truth is `pyproject.toml` and `uv.lock`. Shared runtime
-provisioning is documented in [local-agent-environment](../local-agent-environment/README.md).
-Linux ARM64 uses pinned CPU PyTorch wheels; macOS ARM64 uses standard macOS wheels.
-
-See [optional dreaming](docs/DREAMING.md) and the
-[future-state README](docs/future-state/README.md) for boundaries and possible enhancements.
+- [Protocol, permissions, setup/recovery, reindexing, and backups](https://github.com/jbromfld/babar/blob/master/docs/MEMORA.md)
+- [Architecture and extension boundaries](https://github.com/jbromfld/babar/blob/master/docs/ARCHITECTURE.md)
+- [Optional automation, evidence gates, and CaMeL](https://github.com/jbromfld/babar/blob/master/docs/AUTOMATION.md)
+- [Optional dreaming and consolidation](https://github.com/jbromfld/babar/blob/master/docs/DREAMING.md)
+- [Future-state designs](https://github.com/jbromfld/babar/blob/master/docs/future-state/README.md)
+- [Example consumer: Abacus](https://github.com/jbromfld/abacus/blob/master/docs/advisor-memory.md)
+- [Optional shared host provisioning: local-agent-environment](https://github.com/jbromfld/local-agent-environment)
