@@ -11,7 +11,7 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import Json
 
-from .config import Config
+from .config import Config, admin_parameters, load_config
 
 TABLES = (
     "memora_notes",
@@ -24,17 +24,7 @@ TABLES = (
 
 
 def admin_connection(database):
-    host = os.environ.get("PGHOST", "127.0.0.1")
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        raise ValueError("Provisioning requires loopback PostgreSQL.")
-    return psycopg2.connect(
-        host=host,
-        port=os.environ.get("PGPORT", "5432"),
-        user=os.environ.get("PGUSER"),
-        password=os.environ.get("PGPASSWORD"),
-        dbname=database,
-        connect_timeout=5,
-    )
+    return psycopg2.connect(**admin_parameters(database))
 
 
 def migrate(conn, config):
@@ -155,54 +145,57 @@ def verify(conn, role):
             )
 
 
-def provision(conn, config, rotate=False):
+def provision(conn, config, rotate=False, *, preprovisioned=False):
     with conn.cursor() as cur:
-        cur.execute("SELECT oid FROM pg_database WHERE datname=current_database()")
-        marker = "memora-v1:" + str(cur.fetchone()[0])
-        cur.execute(
-            "SELECT shobj_description(oid,'pg_authid') FROM pg_roles WHERE rolname=%s",
-            (config.user,),
-        )
-        existing = cur.fetchone()
-        if existing and existing[0] != marker:
-            raise ValueError("Refusing to modify an unrelated existing role.")
-        if existing:
-            # Do not repair ownership or membership, which can belong to another application.
-            with conn.cursor() as check:
-                check.execute(
-                    """SELECT EXISTS(SELECT 1 FROM pg_auth_members WHERE member=r.oid),
-                  EXISTS(SELECT 1 FROM pg_shdepend WHERE refclassid='pg_authid'::regclass AND refobjid=r.oid AND deptype='o')
-                  FROM pg_roles r WHERE rolname=%s""",
-                    (config.user,),
-                )
-                if any(check.fetchone()):
-                    raise ValueError(
-                        "Managed role unexpectedly owns objects or has memberships."
+        if not preprovisioned:
+            cur.execute("SELECT oid FROM pg_database WHERE datname=current_database()")
+            marker = "memora-v1:" + str(cur.fetchone()[0])
+            cur.execute(
+                "SELECT shobj_description(oid,'pg_authid') FROM pg_roles WHERE rolname=%s",
+                (config.user,),
+            )
+            existing = cur.fetchone()
+            if existing and existing[0] != marker:
+                raise ValueError("Refusing to modify an unrelated existing role.")
+            if existing:
+                # Do not repair ownership or membership, which can belong to another application.
+                with conn.cursor() as check:
+                    check.execute(
+                        """SELECT EXISTS(SELECT 1 FROM pg_auth_members WHERE member=r.oid),
+                      EXISTS(SELECT 1 FROM pg_shdepend WHERE refclassid='pg_authid'::regclass AND refobjid=r.oid AND deptype='o')
+                      FROM pg_roles r WHERE rolname=%s""",
+                        (config.user,),
                     )
-        else:
-            cur.execute(
-                sql.SQL(
-                    "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT"
-                ).format(sql.Identifier(config.user))
-            )
-            cur.execute(
-                sql.SQL("COMMENT ON ROLE {} IS %s").format(sql.Identifier(config.user)),
-                (marker,),
-            )
-        if not existing or rotate:
-            # Only the verifier enters SQL; plaintext passwords are never logged in SQL.
-            verifier = psycopg2.extensions.encrypt_password(
-                config.password.get_secret_value(),
-                config.user,
-                conn,
-                algorithm="scram-sha-256",
-            )
-            cur.execute(
-                sql.SQL("ALTER ROLE {} PASSWORD %s").format(
-                    sql.Identifier(config.user)
-                ),
-                (verifier,),
-            )
+                    if any(check.fetchone()):
+                        raise ValueError(
+                            "Managed role unexpectedly owns objects or has memberships."
+                        )
+            else:
+                cur.execute(
+                    sql.SQL(
+                        "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT"
+                    ).format(sql.Identifier(config.user))
+                )
+                cur.execute(
+                    sql.SQL("COMMENT ON ROLE {} IS %s").format(
+                        sql.Identifier(config.user)
+                    ),
+                    (marker,),
+                )
+            if not existing or rotate:
+                # Only the verifier enters SQL; plaintext passwords are never logged in SQL.
+                verifier = psycopg2.extensions.encrypt_password(
+                    config.password.get_secret_value(),
+                    config.user,
+                    conn,
+                    algorithm="scram-sha-256",
+                )
+                cur.execute(
+                    sql.SQL("ALTER ROLE {} PASSWORD %s").format(
+                        sql.Identifier(config.user)
+                    ),
+                    (verifier,),
+                )
         cur.execute(
             sql.SQL("REVOKE ALL ON DATABASE {} FROM {}").format(
                 sql.Identifier(config.database), sql.Identifier(config.user)
@@ -249,13 +242,26 @@ def main():
     parser.add_argument("--database", default="babar_memory")
     parser.add_argument("--user", default="babar_memory")
     parser.add_argument("--rotate-password", action="store_true")
+    parser.add_argument("--pre-provisioned", action="store_true")
     args = parser.parse_args()
     try:
         if args.config.is_symlink():
             raise ValueError("Use a regular owner-only runtime file.")
         exists = args.config.exists()
+        if args.pre_provisioned and (not exists or args.rotate_password):
+            raise ValueError(
+                "Pre-provisioned setup requires an existing profile and forbids rotation."
+            )
         if exists:
-            config = Config.model_validate_json(args.config.read_text())
+            previous = os.environ.get("MEMORA_CONFIG")
+            try:
+                os.environ["MEMORA_CONFIG"] = str(args.config)
+                config = load_config()
+            finally:
+                if previous is None:
+                    os.environ.pop("MEMORA_CONFIG", None)
+                else:
+                    os.environ["MEMORA_CONFIG"] = previous
             if config.namespace != args.namespace:
                 raise ValueError(
                     "A runtime profile cannot be reassigned to another namespace."
@@ -273,22 +279,53 @@ def main():
                 database=args.database,
                 user=args.user,
                 password=secrets.token_urlsafe(32),
-            )
-        bootstrap = admin_connection(os.environ.get("PGDATABASE", "postgres"))
-        try:
-            bootstrap.autocommit = True
-            with bootstrap.cursor() as cur:
-                cur.execute(
-                    "SELECT 1 FROM pg_database WHERE datname=%s", (config.database,)
-                )
-                if not cur.fetchone():
-                    cur.execute(
-                        sql.SQL("CREATE DATABASE {}").format(
-                            sql.Identifier(config.database)
-                        )
+                **{
+                    name: value
+                    for name, value in admin_parameters(
+                        args.database,
+                        {
+                            **os.environ,
+                            **(
+                                {"PGSSLMODE": "verify-full"}
+                                if os.environ.get("PGHOST", "127.0.0.1")
+                                not in ("127.0.0.1", "localhost", "::1")
+                                and "PGSSLMODE" not in os.environ
+                                else {}
+                            ),
+                        },
+                    ).items()
+                    if name
+                    in (
+                        "sslmode",
+                        "sslrootcert",
+                        "sslcert",
+                        "sslkey",
+                        "connect_timeout",
                     )
+                },
+            )
+        bootstrap = (
+            None
+            if args.pre_provisioned
+            else admin_connection(os.environ.get("PGDATABASE", "postgres"))
+        )
+        try:
+            if bootstrap is not None:
+                bootstrap.autocommit = True
+            if bootstrap is not None:
+                with bootstrap.cursor() as cur:
+                    cur.execute(
+                        "SELECT 1 FROM pg_database WHERE datname=%s", (config.database,)
+                    )
+                    if not cur.fetchone():
+                        cur.execute(
+                            sql.SQL("CREATE DATABASE {}").format(
+                                sql.Identifier(config.database)
+                            )
+                        )
         finally:
-            bootstrap.close()
+            if bootstrap is not None:
+                bootstrap.close()
         conn = admin_connection(config.database)
         try:
             with conn:
@@ -302,7 +339,12 @@ def main():
                             raise ValueError(
                                 "Existing credentials missing. Recover explicitly with --rotate-password."
                             )
-                provision(conn, config, rotate=args.rotate_password)
+                provision(
+                    conn,
+                    config,
+                    rotate=args.rotate_password,
+                    preprovisioned=args.pre_provisioned,
+                )
         finally:
             conn.close()
         check = psycopg2.connect(**config.connection())

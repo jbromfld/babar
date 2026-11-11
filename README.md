@@ -25,7 +25,7 @@ Babar runs as a local stdio process. Its database is separate from the consumer'
 application data. It requires neither a particular application repository nor a
 workflow engine, generative-model server, container platform, or HTTP service.
 PostgreSQL and the model cache must be prepared separately; starting Babar does
-not provision them. The current database connection is restricted to loopback.
+not provision them. Operator-configured PostgreSQL endpoints support explicit libpq TLS settings.
 
 Applications authorize mutations through user approval or a configured workflow
 policy. The core validates storage operations but does not enforce application
@@ -116,6 +116,39 @@ This is an explicit preparation step. Runtime never downloads weights, uses clou
 embeddings, or enables remote tracing. If using a custom cache, set the same
 `HF_HOME` during preparation and in the MCP child's environment. An isolated
 runtime needs a readable copy of that cache.
+
+### Container consumers and remote databases
+
+A consumer can package Babar from a full pinned commit and `uv.lock` in a separate
+Linux Python environment, then launch it over stdio in the same container. Record
+that source revision in the consumer release. Babar does not need its own Service
+or Deployment. Updates require rebuilding and promoting the consumer image.
+
+Mount the offline model cache read-only and explicitly pass `HF_HOME` to the child.
+Run as a fixed non-root UID. A Kubernetes Secret mount alone does not satisfy
+profile ownership checks: copy the profile into a memory-backed volume, chown it
+to the runtime UID, and chmod it 0600. Recreate the pod after Secret rotation.
+
+Runtime profiles accept `sslmode`, `sslrootcert`, `sslcert`, `sslkey`, and
+`connect_timeout` (1–60 seconds, default 5). Non-loopback endpoints require an
+explicit TLS mode. Use `verify-full` and a trusted CA for remote production
+endpoints; an explicit `disable` is available for private local development.
+Certificate paths refer to the runtime filesystem. No TLS downgrade is attempted.
+
+Setup and reindex independently accept `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`,
+`PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, and `PGCONNECT_TIMEOUT`.
+Administrator settings never come from MCP arguments. For an existing database
+and restricted login, provide an existing owner-only profile and run:
+
+```sh
+uv run --no-sync babar-setup --config /private/memory.json \
+  --namespace project-planner --pre-provisioned
+```
+
+This maintains schema/grants and checks model identity and effective privileges
+without creating a database/login or rotating its password. The administrator
+must have schema/grant maintenance privileges. Cloud provider compatibility
+requires testing against the actual provider; local TLS tests alone do not verify it.
 
 ### 3. Provision PostgreSQL and a runtime profile
 
