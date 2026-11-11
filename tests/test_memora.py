@@ -45,7 +45,7 @@ def database():
     with conn:
         with conn.cursor() as cur:
             cur.execute(
-                "DROP TABLE IF EXISTS memora_revisions,memora_notes,memora_model,memora_migrations CASCADE"
+                "DROP TABLE IF EXISTS memora_consolidations,memora_revisions,memora_notes,memora_model,memora_migrations CASCADE"
             )
         migrate(conn, config)
         provision(conn, config)
@@ -383,3 +383,120 @@ def test_reindex_can_change_dimensions_atomically(store, database):
         store.list()
     with admin:
         reindex(admin, original, encoded)
+
+
+def test_dreaming_atomic_retry_undo_and_forget(store):
+    key = str(uuid4())
+    a = store.create(note(), str(uuid4()))
+    b = store.create(note(title="Similar savings"), str(uuid4()))
+    refs = [dict(id=r["id"], revision=r["revision"]) for r in [a, b]]
+    assert store.dream_candidates()["groups"]
+    merged = store.consolidate(note(), refs, key)
+    assert store.consolidate(note(), refs, key)["id"] == merged["id"]
+    assert [r["id"] for r in store.search("saving")["items"]] == [merged["id"]]
+    assert len(store.get(merged["id"])["consolidation"]["sources"]) == 2
+    with pytest.raises(StoreError):
+        store.update(a["id"], note(text="Changed"), 2)
+    with pytest.raises(StoreError):
+        store.forget(merged["id"], merged["revision"])
+    store.undo_consolidation(key, merged["revision"])
+    assert {r["id"] for r in store.search("saving")["items"]} == {a["id"], b["id"]}
+    store.forget_consolidation(merged["id"], 2)
+    assert store.list()["items"] == []
+
+
+def test_dreaming_revision_conflict_does_not_partially_supersede(store):
+    a = store.create(note(), str(uuid4()))
+    b = store.create(note(), str(uuid4()))
+    store.update(b["id"], note(text="New facts"), b["revision"])
+    with pytest.raises(StoreError):
+        store.consolidate(
+            note(),
+            [dict(id=r["id"], revision=r["revision"]) for r in [a, b]],
+            str(uuid4()),
+        )
+    assert store.get(a["id"])["superseded_by"] is None
+    assert store.get(a["id"])["revision"] == 1
+
+
+def test_dreaming_edited_result_cannot_be_undone(store):
+    a, b = [store.create(note(), str(uuid4())) for _ in range(2)]
+    key = str(uuid4())
+    result = store.consolidate(
+        note(), [dict(id=r["id"], revision=1) for r in [a, b]], key
+    )
+    store.update(result["id"], note(text="Edited canonical memory"), 1)
+    with pytest.raises(StoreError):
+        store.undo_consolidation(key, 2)
+
+
+def test_dreaming_namespace_boundary_and_original_creation_key(store):
+    key = str(uuid4())
+    a = store.create(note(), key)
+    b = store.create(note(), str(uuid4()))
+    refs = [dict(id=r["id"], revision=1) for r in [a, b]]
+    foreign = Store(store.config.model_copy(update={"namespace": "app-b"}), encoded)
+    with pytest.raises(StoreError):
+        foreign.consolidate(note(), refs, str(uuid4()))
+    result = store.consolidate(note(), refs, str(uuid4()))
+    retry = store.create(note(), key)
+    assert retry["id"] == a["id"] and retry["superseded_by"] == result["id"]
+    assert len(store.list()["items"]) == 3
+
+
+def test_nested_consolidation_forgetting_removes_every_retained_copy(store):
+    a, b, c = [store.create(note(), str(uuid4())) for _ in range(3)]
+    first = store.consolidate(
+        note(), [dict(id=r["id"], revision=1) for r in [a, b]], str(uuid4())
+    )
+    last = store.consolidate(
+        note(), [dict(id=r["id"], revision=1) for r in [first, c]], str(uuid4())
+    )
+    store.forget_consolidation(last["id"], 1)
+    assert store.list()["items"] == []
+    with store.connect() as conn, conn.cursor() as cur:
+        for table in ["memora_consolidations", "memora_revisions"]:
+            cur.execute(
+                "SELECT count(*) AS count FROM " + table + " WHERE namespace=%s",
+                (store.config.namespace,),
+            )
+            assert cur.fetchone()["count"] == 0
+
+
+def test_populated_v1_upgrade_retains_notes_and_creation_keys(store, database):
+    conn, config = database
+    key = str(uuid4())
+    original = store.create(note(), key)
+    with conn, conn.cursor() as cur:
+        cur.execute("DROP TABLE memora_consolidations")
+        cur.execute("ALTER TABLE memora_notes DROP COLUMN superseded_by")
+        cur.execute("DELETE FROM memora_migrations")
+        cur.execute("INSERT INTO memora_migrations(version) VALUES(1)")
+    with conn:
+        migrate(conn, config)
+        provision(conn, config)
+    retained = store.get(original["id"])
+    assert retained["text"] == original["text"] and retained["revision"] == 1
+    assert store.create(note(), key)["id"] == original["id"]
+    assert "dreaming-v1" in store.status()["capabilities"]
+
+
+def test_concurrent_dreams_cannot_supersede_the_same_sources_twice(store):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    a, b = [store.create(note(), str(uuid4())) for _ in range(2)]
+    refs = [dict(id=r["id"], revision=1) for r in [a, b]]
+    barrier = Barrier(2)
+
+    def attempt(_):
+        barrier.wait()
+        try:
+            return store.consolidate(note(), refs, str(uuid4()))["id"]
+        except StoreError as exc:
+            assert exc.code == "conflict"
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, range(2)))
+    assert sum(value is not None for value in results) == 1

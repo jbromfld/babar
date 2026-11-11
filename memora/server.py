@@ -54,6 +54,26 @@ def build_server(store):
     def memory_forget(id: str, expected_revision: int) -> dict:
         return call("forget", id, expected_revision)
 
+    @server.tool()
+    def memory_dream_candidates(limit: int = 5) -> dict:
+        return call("dream_candidates", limit)
+
+    @server.tool()
+    def memory_consolidation_status(operation_key: str) -> dict:
+        return call("consolidation_status", operation_key)
+
+    @server.tool()
+    def memory_consolidate(note: dict, sources: list[dict], operation_key: str) -> dict:
+        return call("consolidate", note, sources, operation_key)
+
+    @server.tool()
+    def memory_undo_consolidation(operation_key: str, expected_revision: int) -> dict:
+        return call("undo_consolidation", operation_key, expected_revision)
+
+    @server.tool()
+    def memory_forget_consolidation(id: str, expected_revision: int) -> dict:
+        return call("forget_consolidation", id, expected_revision)
+
     return server
 
 

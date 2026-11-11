@@ -13,7 +13,13 @@ from psycopg2.extras import Json
 
 from .config import Config
 
-TABLES = ("memora_notes", "memora_revisions", "memora_model", "memora_migrations")
+TABLES = (
+    "memora_notes",
+    "memora_revisions",
+    "memora_consolidations",
+    "memora_model",
+    "memora_migrations",
+)
 
 
 def admin_connection(database):
@@ -41,7 +47,7 @@ def migrate(conn, config):
         )
         cur.execute("SELECT max(version) FROM memora_migrations")
         version = cur.fetchone()[0]
-        if version is not None and version != 1:
+        if version is not None and version not in (1, 2):
             raise ValueError("Unsupported Memora schema version.")
         cur.execute(
             "SELECT atttypmod FROM pg_attribute WHERE attrelid='public.memora_notes'::regclass AND attname='primary_embedding'"
@@ -57,7 +63,7 @@ def migrate(conn, config):
             (Json(config.identity),),
         )
         cur.execute(
-            "INSERT INTO memora_migrations(version) VALUES(1) ON CONFLICT DO NOTHING"
+            "INSERT INTO memora_migrations(version) VALUES(2) ON CONFLICT DO NOTHING"
         )
 
 
@@ -110,9 +116,7 @@ def verify(conn, role):
             (role,) * 5,
         )
         for schema, table, read, insert, update, delete, unsafe in cur.fetchall():
-            editable = (
-                table in ("memora_notes", "memora_revisions") and schema == "public"
-            )
+            editable = table in TABLES[:3] and schema == "public"
             allowed = table in TABLES and schema == "public"
             if (read, insert, update, delete, unsafe) != (
                 allowed,
@@ -226,7 +230,7 @@ def provision(conn, config, rotate=False):
         for table in TABLES:
             privileges = (
                 sql.SQL("SELECT,INSERT,UPDATE,DELETE")
-                if table in TABLES[:2]
+                if table in TABLES[:3]
                 else sql.SQL("SELECT")
             )
             cur.execute(

@@ -10,6 +10,8 @@ import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .dreaming import DreamingStore
+
 
 class Note(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -49,6 +51,10 @@ def public(row):
     return {
         "id": str(row["id"]),
         "revision": row["revision"],
+        "is_consolidated": bool(row.get("consolidated")),
+        "superseded_by": str(row["superseded_by"])
+        if row.get("superseded_by")
+        else None,
         **row["memory_value"],
         "title": row["primary_abstraction"],
         "cues": row["cue_anchors"],
@@ -58,7 +64,7 @@ def public(row):
     }
 
 
-class Store:
+class Store(DreamingStore):
     def __init__(self, config, embed):
         self.config, self.embed = config, embed
 
@@ -78,12 +84,12 @@ class Store:
                     if (
                         not row
                         or row["identity"] != self.config.identity
-                        or row["version"] != 1
+                        or row["version"] != 2
                         or row["dimension"] != self.config.dimension
                     ):
                         raise StoreError(
                             "configuration",
-                            "Embedding identity changed; run an explicit reindex.",
+                            "Memory schema or embedding identity changed; run setup for schema upgrades or explicit reindex for model changes.",
                         )
                 yield conn
         finally:
@@ -97,7 +103,11 @@ class Store:
                 "SELECT count(*) AS count FROM memora_notes WHERE namespace=%s",
                 (self.config.namespace,),
             )
-            return {"ready": True, "count": cur.fetchone()["count"]}
+            return {
+                "ready": True,
+                "count": cur.fetchone()["count"],
+                "capabilities": ["dreaming-v1"],
+            }
 
     def embedding(self, text):
         return vector(self.embed(text), self.config.dimension)
@@ -126,10 +136,21 @@ class Store:
             if row is None:
                 raise StoreError("not_found", "Memory not found.")
             cur.execute(
+                "SELECT operation_key,sources,undone FROM memora_consolidations WHERE namespace=%s AND result_id=%s",
+                (self.config.namespace, str(id)),
+            )
+            consolidation = cur.fetchone()
+            if consolidation:
+                consolidation["operation_key"] = str(consolidation["operation_key"])
+            cur.execute(
                 "SELECT document FROM memora_revisions WHERE namespace=%s AND note_id=%s ORDER BY revision DESC",
                 (self.config.namespace, str(id)),
             )
-            return {**public(row), "history": [r["document"] for r in cur.fetchall()]}
+            return {
+                **public(row),
+                "consolidation": consolidation,
+                "history": [r["document"] for r in cur.fetchall()],
+            }
 
     def search(self, query, limit=3):
         if not query.strip() or len(query) > 2000 or not 1 <= limit <= 10:
@@ -140,11 +161,11 @@ class Store:
         terms = sorted(set(re.findall(r"[a-z0-9]{3,}", query.casefold())))[:40]
         with self.connect() as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT *, 1-(primary_embedding <=> %s::vector) AS similarity,
+                """SELECT *, EXISTS(SELECT 1 FROM memora_consolidations c WHERE c.namespace=memora_notes.namespace AND c.result_id=memora_notes.id) AS consolidated, 1-(primary_embedding <=> %s::vector) AS similarity,
               ts_rank_cd(to_tsvector('english',primary_abstraction || ' ' || (memory_value->>'text') || ' ' || array_to_string(cue_anchors,' ')),
                          to_tsquery('english',%s)) AS lexical,
               (cue_anchors && %s::text[]) AS cue_match
-              FROM memora_notes WHERE namespace=%s AND status='active'
+              FROM memora_notes WHERE namespace=%s AND status='active' AND superseded_by IS NULL
               ORDER BY primary_embedding <=> %s::vector, id LIMIT 100""",
                 (embedding, " | ".join(terms), terms, self.config.namespace, embedding),
             )
@@ -183,7 +204,9 @@ class Store:
             )
             existing = cur.fetchone()
             if existing:
-                saved = {k: public(existing)[k] for k in Note.model_fields}
+                saved_document = existing["memory_value"]
+                # Supersession doesn't change the user's original create request.
+                saved = {k: saved_document[k] for k in Note.model_fields}
                 if saved != note.model_dump(mode="json"):
                     raise StoreError(
                         "conflict",
@@ -223,7 +246,7 @@ class Store:
             cur.execute(
                 """UPDATE memora_notes SET primary_abstraction=%s,primary_embedding=%s::vector,
               memory_value=%s,cue_anchors=%s,status=%s,revision=revision+1,updated_at=now()
-              WHERE namespace=%s AND id=%s AND revision=%s RETURNING *""",
+              WHERE namespace=%s AND id=%s AND revision=%s AND superseded_by IS NULL RETURNING *""",
                 (
                     note.title,
                     embedding,
@@ -246,12 +269,20 @@ class Store:
 
     def forget(self, id, expected_revision):
         with self.connect() as conn, conn.cursor() as cur:
+            self._dream_lock(cur)
+            cur.execute(
+                "SELECT 1 FROM memora_consolidations WHERE namespace=%s AND (result_id=%s OR sources @> %s::jsonb)",
+                (self.config.namespace, str(UUID(id)), Json([{"id": str(UUID(id))}])),
+            )
+            if cur.fetchone():
+                raise StoreError(
+                    "conflict",
+                    "Use forget consolidated family to remove retained source evidence.",
+                )
             cur.execute(
                 "DELETE FROM memora_notes WHERE namespace=%s AND id=%s AND revision=%s RETURNING id",
-                (self.config.namespace, str(UUID(str(id))), expected_revision),
+                (self.config.namespace, str(UUID(id)), expected_revision),
             )
             if cur.fetchone() is None:
-                raise StoreError(
-                    "conflict", "Memory changed or was already forgotten. Reload first."
-                )
+                raise StoreError("conflict", "Memory changed or was forgotten.")
         return {"forgotten": True}
