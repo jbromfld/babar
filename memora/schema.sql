@@ -20,3 +20,12 @@ CREATE TABLE IF NOT EXISTS memora_revisions (
 CREATE INDEX IF NOT EXISTS memora_notes_namespace ON memora_notes(namespace,status,created_at,id);
 CREATE INDEX IF NOT EXISTS memora_notes_embedding ON memora_notes USING hnsw(primary_embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS memora_notes_cues ON memora_notes USING gin(cue_anchors);
+
+-- Version 2 adds independent supersession and retained source evidence.
+ALTER TABLE memora_notes ADD COLUMN IF NOT EXISTS superseded_by uuid;
+CREATE TABLE IF NOT EXISTS memora_consolidations (
+ namespace text NOT NULL, operation_key uuid NOT NULL, result_id uuid NOT NULL,
+ request jsonb NOT NULL, sources jsonb NOT NULL, undone boolean NOT NULL DEFAULT false,
+ created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(namespace,operation_key),
+ FOREIGN KEY(namespace,result_id) REFERENCES memora_notes(namespace,id) ON DELETE CASCADE
+);

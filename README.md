@@ -1,7 +1,6 @@
+![A wise elephant recalling a glowing note from an organized archive of memories](docs/images/babar.png)
+
 # Babar
-
-![A wise elephant recalling a glowing note from an organized archive of memories](docs/images/babar-memory.png)
-
 Babar is a local application-memory service implementing the **MEMORA** pattern.
 It stores sourced notes, retrieves relevant context, and preserves explicit
 revisions across conversations and application restarts. Applications connect
@@ -26,8 +25,7 @@ Application authorizes a memory write
   → note + provenance + revision committed atomically
 ```
 
-Similarity helps retrieval and duplicate suggestions. It **never** silently merges
-or overwrites records. The application decides what to remember, when approval is
+Similarity helps retrieval and duplicate suggestions. It **never** merges records from similarity alone. Consolidation requires an explicit, revision-checked operation authorized by the consumer. The application decides what to remember, when approval is
 required, how much context to supply to its model, and what conclusions that context
 supports. The current core does not run generative models or execute instructions
 in notes.
@@ -141,6 +139,15 @@ kinds further: Abacus accepts intentions, preferences, and decisions. See the
 - `memory_create(note, create_key)`
 - `memory_update(id, note, expected_revision)`
 - `memory_forget(id, expected_revision)`
+- `memory_dream_candidates(limit)`
+- `memory_consolidate(note, sources, operation_key)`
+- `memory_consolidation_status(operation_key)`
+- `memory_undo_consolidation(operation_key, expected_revision)`
+- `memory_forget_consolidation(id, expected_revision)`
+
+Schema version 2 adds explicit consolidation and retained lineage. Run setup to
+upgrade the memory database and runtime grants; status advertises `dreaming-v1`.
+Babar never calls a generative model. See [dreaming](docs/DREAMING.md).
 
 The service fixes namespace/model configuration and provides no arbitrary SQL,
 file tools, network searches, or sampling. Hosts authorize mutations through user
