@@ -322,6 +322,9 @@ network searches, or MCP sampling.
 
 ## Verification and further reading
 
+See the [changelog](https://github.com/jbromfld/babar/blob/main/CHANGELOG.md) for
+release changes and upgrade instructions.
+
 Synthetic PostgreSQL and real stdio tests use a dedicated database whose name
 starts with `babar_test` (default `babar_test_memory`). Set `MEMORA_TEST_DSN` for
 another isolated test database with that prefix. The test administrator needs
