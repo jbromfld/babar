@@ -74,6 +74,28 @@ def build_server(store):
     def memory_forget_consolidation(id: str, expected_revision: int) -> dict:
         return call("forget_consolidation", id, expected_revision)
 
+    @server.tool()
+    def memory_dream_prepare(pass_key: str) -> dict:
+        return call("dream_prepare", pass_key)
+
+    @server.tool()
+    def memory_dream_get(operation_key: str) -> dict:
+        return call("dream_get", operation_key)
+
+    @server.tool()
+    def memory_dream_evaluate(operation_key: str, raw: str) -> dict:
+        return call("dream_evaluate", operation_key, raw)
+
+    @server.tool()
+    def memory_dream_commit(
+        operation_key: str, reviewed: bool = False, note: dict | None = None
+    ) -> dict:
+        return call("dream_commit", operation_key, reviewed, note)
+
+    @server.tool()
+    def memory_dream_cancel(operation_key: str) -> dict:
+        return call("dream_cancel", operation_key)
+
     return server
 
 

@@ -10,6 +10,7 @@ import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .dream_controller import DreamController
 from .dreaming import DreamingStore
 
 
@@ -64,7 +65,7 @@ def public(row):
     }
 
 
-class Store(DreamingStore):
+class Store(DreamController, DreamingStore):
     def __init__(self, config, embed):
         self.config, self.embed = config, embed
 
@@ -84,7 +85,7 @@ class Store(DreamingStore):
                     if (
                         not row
                         or row["identity"] != self.config.identity
-                        or row["version"] != 2
+                        or row["version"] != 3
                         or row["dimension"] != self.config.dimension
                     ):
                         raise StoreError(
@@ -106,7 +107,7 @@ class Store(DreamingStore):
             return {
                 "ready": True,
                 "count": cur.fetchone()["count"],
-                "capabilities": ["dreaming-v1"],
+                "capabilities": ["dreaming-v1", "dreaming-controller-v1"],
             }
 
     def embedding(self, text):
@@ -285,4 +286,5 @@ class Store(DreamingStore):
             )
             if cur.fetchone() is None:
                 raise StoreError("conflict", "Memory changed or was forgotten.")
+            self._purge_dreams(cur, [str(UUID(id))])
         return {"forgotten": True}

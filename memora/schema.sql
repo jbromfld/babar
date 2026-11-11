@@ -29,3 +29,12 @@ CREATE TABLE IF NOT EXISTS memora_consolidations (
  created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(namespace,operation_key),
  FOREIGN KEY(namespace,result_id) REFERENCES memora_notes(namespace,id) ON DELETE CASCADE
 );
+
+-- Version 3: optional controller state, independent of ordinary notes.
+CREATE TABLE IF NOT EXISTS memora_dreams (
+ namespace text NOT NULL, operation_key uuid NOT NULL, pass_key uuid NOT NULL,
+ sources jsonb NOT NULL, document jsonb NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(namespace,operation_key)
+);
+CREATE INDEX IF NOT EXISTS memora_dreams_pass ON memora_dreams(namespace,pass_key);
