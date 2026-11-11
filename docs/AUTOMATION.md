@@ -2,8 +2,10 @@
 
 Babar's implemented service is the MEMORA storage/retrieval core. It supports both
 human-approved and policy-authorized consumers through the same MCP operations.
-An optional automation runner is an architectural extension; no runner, P/Q agents,
-CaMeL interpreter, evidence gate, or automatic consolidation is implemented today.
+An optional deterministic dreaming controller now supplies source-bound proposals,
+conservative consolidation policy and atomic commit/recovery through MCP. Consumers
+supply scheduling and tool-free model adapters. General automation runners, P/Q
+LLMs and CaMeL interpreters remain architectural extensions.
 The earlier CI-specific prototype was scaffolding, not a working CaMeL engine.
 
 ## Responsibilities
@@ -11,7 +13,8 @@ The earlier CI-specific prototype was scaffolding, not a working CaMeL engine.
 | Layer | Responsibility | Current status |
 | --- | --- | --- |
 | MEMORA core | Namespace-scoped retrieval, schema validation, provenance, idempotent creates, explicit revisions, and atomic writes | Implemented |
-| Optional automation runner | Extract candidates, evaluate applicability, validate evidence, handle review/retries, and invoke permitted writes | Extension design |
+| Optional dreaming controller | Bind candidates, evaluate proposals, revalidate policy/revisions, and commit atomically | Implemented; see [dreaming](DREAMING.md) |
+| General automation runner | Interpret external events and authoritative outcome evidence | Extension design |
 | Application policy | Define trusted events, acceptable evidence, allowed actions, and review requirements | Supplied by each consumer |
 
 Abacus uses explicit user approval: a local model drafts a note, the user reviews
@@ -24,7 +27,8 @@ The core validates note fields, namespace scoping, creation keys, and revisions.
 It does not verify that a deployment succeeded, a source is authoritative, a user
 accepted a recommendation, or a workflow is entitled to remember a claim. A
 schema-valid MCP write is applied immediately; callers must enforce authorization
-before invoking it. The current core has no pending-approval queue.
+before invoking it. The ordinary write API has no pending-approval queue. The optional dreaming
+controller persists bounded review proposals separately.
 
 ## A bounded automated workflow
 
@@ -125,3 +129,6 @@ revision conflicts, and review escalation. Include hostile source text attemptin
 to change the namespace, target a different record, invent an outcome, delete
 history, or disclose private data. Verify denied actions leave memory unchanged
 and that no model receives credentials or capabilities outside its configured role.
+
+The [future-state README](future-state/README.md) distinguishes the implemented
+controller boundary from stronger isolation and agent enhancements.
