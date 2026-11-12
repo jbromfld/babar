@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.0] — 2026-11-11
+
+### Added
+
+- Explicit operator-configured PostgreSQL endpoints with libpq TLS certificate
+  fields and bounded connection timeouts. Existing loopback profiles remain valid.
+- Shared administrator transport policy for setup/reindex and pre-provisioned
+  schema/grant maintenance without database/role creation or password rotation.
+- Optional `include_superseded=false` for current-note listing before pagination;
+  the default listing retains historical sources for compatibility and Undo.
+- Documentation for consumer-owned, pinned Linux container runtimes with private
+  profiles and read-only offline model caches.
+
+### Changed
+
+- Dreaming candidate similarity threshold is now above **0.68** (cosine distance
+  below 0.32). Candidate selection still grants no authority to consolidate.
+- Distribution and lockfile version advance to 0.3.0. Database schema remains
+  **3**; this release requires no schema migration or re-embedding from 0.2.0.
+
 ## [0.2.0](https://github.com/jbromfld/babar/compare/v0.1.0...v0.2.0)
 
 This release adds explicit memory consolidation with retained source evidence and
