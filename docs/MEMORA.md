@@ -115,3 +115,15 @@ idempotency, completion/abandonment, forgetting, real stdio protocol with Postgr
 permission denials, safe errors, pagination, model/config identity, and atomic
 reindex failure/recovery. Offline model readiness can be checked separately with
 `memory_status`; it does not read budget records or download model files.
+
+## Consumer-owned container runtime
+
+See the README's container/remote database section for the operator profile and
+administrator transport contracts. Consumers package a pinned Babar commit and
+lockfile in a separate Linux environment, own stdio lifecycle, and mount offline
+models read-only. Kubernetes profile files must have the runtime UID and mode
+0600; copy Secret files into memory-backed storage and restart after rotation.
+Existing databases can use `babar-setup --pre-provisioned` with an existing private
+profile, preserving credentials while maintaining schema/grants. Database moves
+preserve model identity, UUIDs and revisions; do not re-embed merely for a location
+change. Actual managed providers remain unverified until tested there.
