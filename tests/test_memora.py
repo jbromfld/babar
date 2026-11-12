@@ -786,3 +786,14 @@ def test_controller_commit_rechecks_policy_instead_of_ready_flag(store, database
         )
     with pytest.raises(StoreError):
         store.dream_commit(group["operation_key"])
+
+
+@pytest.mark.parametrize("similarity,eligible", [(0.688, True), (0.679, False)])
+def test_dream_candidate_similarity_cutoff(store, similarity, eligible):
+    from math import sqrt
+
+    vectors = iter(([1.0, 0.0, 0.0], [similarity, sqrt(1 - similarity**2), 0.0]))
+    store.embed = lambda _: next(vectors)
+    store.create(note(), str(uuid4()))
+    store.create(note(title="Related savings"), str(uuid4()))
+    assert bool(store.dream_candidates()["groups"]) is eligible

@@ -25,7 +25,7 @@ class DreamingStore:
                 WHERE a.namespace=%s AND a.status='active' AND b.status='active'
                 AND a.superseded_by IS NULL AND b.superseded_by IS NULL
                 AND a.memory_value->>'kind'=b.memory_value->>'kind'
-                AND (a.primary_embedding <=> b.primary_embedding)<0.3
+                AND (a.primary_embedding <=> b.primary_embedding)<0.32
                 ORDER BY a.primary_embedding <=> b.primary_embedding,a.id,b.id LIMIT 100""",
                 (self.config.namespace, self.config.namespace),
             )
