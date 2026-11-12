@@ -35,8 +35,10 @@ def build_server(store):
         return call("search", query, limit)
 
     @server.tool()
-    def memory_list(offset: int = 0, limit: int = 25) -> dict:
-        return call("list", offset, limit)
+    def memory_list(
+        offset: int = 0, limit: int = 25, include_superseded: bool = True
+    ) -> dict:
+        return call("list", offset, limit, include_superseded)
 
     @server.tool()
     def memory_get(id: str) -> dict:

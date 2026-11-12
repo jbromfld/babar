@@ -12,7 +12,7 @@ Old consumers can continue ordinary operations after setup; consumers must check
 
 `memory_dream_candidates(limit=5)` compares at most 200 recently updated active
 notes in the fixed namespace. It returns disjoint pairs with matching kinds and
-cosine distance below 0.3. Similarity only proposes candidates. Consolidation
+cosine distance below 0.32 (similarity above 0.68). Similarity only proposes candidates. Consolidation
 accepts two to five sources, each `{id,revision}`, one validated note, and a UUID
 operation key. Source kinds must match and the canonical source date is the
 earliest source date; individual dates remain in retained source snapshots.

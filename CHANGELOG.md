@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.3.0] — 2026-11-11
+
+### Added
+
+- Operator-configured PostgreSQL DNS/IP endpoints with optional libpq `sslmode`,
+  `sslrootcert`, `sslcert`, and `sslkey` fields. Non-loopback profiles require an
+  explicit TLS mode; existing loopback profiles remain valid.
+- Configurable connection timeout of **1–60 seconds**, defaulting to **5 seconds**,
+  and a shared transport policy for runtime, administrator setup, and reindex.
+  Administrator `PG*` credentials remain separate from runtime profiles.
+- **Pre-provisioned setup:** maintain schema/grants and verify restricted runtime
+  privileges using an existing private profile, database, and login, without
+  creating databases/roles or rotating passwords.
+- Optional `memory_list(..., include_superseded=false)` excludes superseded sources
+  before pagination. The default remains `true` for compatibility; retained
+  originals remain inspectable through the consolidated note and support Undo.
+- Guidance for consumer-owned, pinned Linux container runtimes, owner-only private
+  profiles, and read-only offline model caches. Babar remains an MCP stdio child
+  whose lifecycle and write authorization belong to the consumer.
+
+### Changed
+
+- Dreaming candidate similarity threshold is now **above 0.68**, lowered from
+  above 0.70 (cosine distance below 0.32 rather than 0.30). Matching-kind,
+  namespace, active-note, and supersession checks still apply. Candidate selection
+  grants no authority to consolidate; review and commit checks remain unchanged.
+- Distribution and lockfile version advance to **0.3.0**. Abacus 0.3.0 bundles this
+  Babar release in its separately locked memory environment.
+
+### Upgrade notes
+
+- Database schema remains **3**. Upgrading an already prepared 0.2.0 installation
+  requires no schema migration or re-embedding. Existing notes, UUIDs, creation
+  keys, revisions, namespaces, and model identity are preserved.
+- Deploy this release before supplying the new profile fields or list argument.
+  Restart MCP consumers, or rebuild and promote the consuming image when bundled.
+
 ## [0.2.0](https://github.com/jbromfld/babar/compare/v0.1.0...v0.2.0)
 
 This release adds explicit memory consolidation with retained source evidence and
