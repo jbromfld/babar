@@ -113,13 +113,13 @@ class Store(DreamController, DreamingStore):
     def embedding(self, text):
         return vector(self.embed(text), self.config.dimension)
 
-    def list(self, offset=0, limit=25):
+    def list(self, offset=0, limit=25, include_superseded=True):
         if not 0 <= offset <= 100000 or not 1 <= limit <= 50:
             raise StoreError("invalid", "Invalid pagination.")
         with self.connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT * FROM memora_notes WHERE namespace=%s ORDER BY created_at DESC,id LIMIT %s OFFSET %s",
-                (self.config.namespace, limit + 1, offset),
+                "SELECT * FROM memora_notes WHERE namespace=%s AND (%s OR superseded_by IS NULL) ORDER BY created_at DESC,id LIMIT %s OFFSET %s",
+                (self.config.namespace, include_superseded, limit + 1, offset),
             )
             rows = cur.fetchall()
         return {

@@ -127,3 +127,12 @@ Existing databases can use `babar-setup --pre-provisioned` with an existing priv
 profile, preserving credentials while maintaining schema/grants. Database moves
 preserve model identity, UUIDs and revisions; do not re-embed merely for a location
 change. Actual managed providers remain unverified until tested there.
+
+### Listing current versus historical sources
+
+`memory_list(offset=0, limit=25, include_superseded=true)` retains its historical
+listing behavior by default. Consumers can pass `include_superseded=false` to
+exclude superseded source notes before pagination. Consolidation still retains
+sources and revision evidence for inspection and undo; `memory_get` on the
+combined note includes its original sources. No database rows are deleted by
+this display filter.

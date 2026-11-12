@@ -797,3 +797,21 @@ def test_dream_candidate_similarity_cutoff(store, similarity, eligible):
     store.create(note(), str(uuid4()))
     store.create(note(title="Related savings"), str(uuid4()))
     assert bool(store.dream_candidates()["groups"]) is eligible
+
+
+def test_current_list_excludes_superseded_before_pagination(store):
+    a = store.create(note(), str(uuid4()))
+    b = store.create(note(title="Related savings"), str(uuid4()))
+    key = str(uuid4())
+    merged = store.consolidate(
+        note(), [dict(id=n["id"], revision=1) for n in (a, b)], key
+    )
+    current = store.list(limit=1, include_superseded=False)
+    assert [n["id"] for n in current["items"]] == [merged["id"]]
+    assert current["next_offset"] is None
+    assert len(store.list()["items"]) == 3
+    assert store.get(a["id"])["superseded_by"] == merged["id"]
+    assert len(store.get(merged["id"])["consolidation"]["sources"]) == 2
+    store.undo_consolidation(key, merged["revision"])
+    current_ids = {n["id"] for n in store.list(include_superseded=False)["items"]}
+    assert {a["id"], b["id"]} <= current_ids
